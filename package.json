@@ -1,0 +1,22 @@
+{
+  "name": "com.aceland.resources",
+  "displayName": "AceLand Resources",
+  "version": "1.0.0",
+  "author": {
+    "name": "Parsue - AceLand Workshop",
+    "url": "http://www.parsue.io/"
+  },
+  "unity": "2022.3",
+  "description": "AceLand Resources is a local supporting services dependency",
+  "keywords": [
+    "aceland",
+    "bundle",
+	"resources",
+    "addressable"
+  ],
+  "dependencies": {
+    "com.annulusgames.burst-linq": "1.2.0",
+    "com.cysharp.unitask": "2.5.3",
+    "com.unity.nuget.newtonsoft-json": "3.2.1"
+  }
+}
