@@ -1,8 +1,8 @@
 using System;
 using System.Threading;
 using AceLand.Library.Extensions;
-using AceLand.TasksUtils.Models;
-using AceLand.TasksUtils.Promise;
+using AceLand.TaskUtils.Models;
+using AceLand.TaskUtils.PromiseAwaiter;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.AddressableAssets;
