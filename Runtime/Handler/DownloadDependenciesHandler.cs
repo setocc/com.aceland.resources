@@ -1,10 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
+using System.Threading.Tasks;
 using AceLand.Library.Extensions;
 using AceLand.TaskUtils.Models;
 using AceLand.TaskUtils.PromiseAwaiter;
-using Cysharp.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.AddressableAssets;
 using UnityEngine.ResourceManagement.AsyncOperations;
@@ -119,7 +119,7 @@ namespace AceLand.Resources.Handler
                 var downloadedBytes = handle.GetDownloadStatus().DownloadedBytes;
                 if (totalBytes < 0)
                 {
-                    try { await UniTask.Yield(token, true); }
+                    try { await Task.Yield(); }
                     catch { break; }
                 }
 
@@ -128,7 +128,7 @@ namespace AceLand.Resources.Handler
                 ProgressData.IsDone = handle.IsDone;
                 InProgress.Invoke(ProgressData);
                 if (handle.IsDone || token.IsCancellationRequested) break;
-                await UniTask.Yield();
+                await Task.Yield();
             }
         }
     }
