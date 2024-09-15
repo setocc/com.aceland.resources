@@ -1,7 +1,11 @@
 using System;
 using System.Collections.Generic;
-using AceLand.Resources.Handler;
+using System.Threading;
+using System.Threading.Tasks;
+using AceLand.Library.Extensions;
 using AceLand.Resources.ProjectSetting;
+using AceLand.TaskUtils;
+using AceLand.TaskUtils.PromiseAwaiter;
 using UnityEngine;
 using UnityEngine.AddressableAssets;
 using UnityEngine.AddressableAssets.ResourceLocators;
@@ -14,8 +18,8 @@ namespace AceLand.Resources
     public static class Bundles
     {
         private static ResourcesProjectSettings _settings;
-        private static readonly List<string> _updateCatalogs = new();
-        private static readonly List<string> _assetKeys = new();
+        private static readonly List<string> RequireUpdateCatalogs = new();
+        private static readonly List<string> AssetKeys = new();
 
         public static bool Initialized;
         
@@ -32,15 +36,15 @@ namespace AceLand.Resources
                 var locator = handler.Result;
                 foreach (var key in locator.Keys)
                 {
-                    if (_assetKeys.Contains(key.ToString())) continue;
-                    _assetKeys.Add(key as string);
+                    if (AssetKeys.Contains(key.ToString())) continue;
+                    AssetKeys.Add(key as string);
                 }
-                Debug.Log($"Addressables is initialized. {_assetKeys.Count} Assets Keys arranged.");
+                Debug.Log($"Addressable Assets are initialized. {AssetKeys.Count} Assets Keys arranged.");
 
                 CheckCatalog(
                     onFinal: () =>
                     {
-                        if (!_settings.remoteBundle || _settings.preloadLabels.Count == 0)
+                        if (!_settings.remoteBundle || _settings.preloadLabels.Length == 0)
                         {
                             Initialized = true;
                             return;
@@ -52,7 +56,7 @@ namespace AceLand.Resources
             }
             else
             {
-                Debug.LogError($"Addressables Initialize Error: {handler.Status}");
+                Debug.LogError($"Addressable Assets Initialize Error: {handler.Status}");
             }
         }
 
@@ -89,8 +93,8 @@ namespace AceLand.Resources
                 {
                     foreach (var key in item.Keys)
                     {
-                        if (_updateCatalogs.Contains(key.ToString())) continue;
-                        _updateCatalogs.Add(key.ToString());
+                        if (RequireUpdateCatalogs.Contains(key.ToString())) continue;
+                        RequireUpdateCatalogs.Add(key.ToString());
                     }
                 }
                 Debug.Log("Catalog update completed");
@@ -99,46 +103,161 @@ namespace AceLand.Resources
             };
         }
 
-        public static DownloadDependenciesHandler DownloadDependencies(IEnumerable<AssetLabelReference> categories)
+        private static Promise DownloadDependencies(AssetLabelReference[] categories, Action<ProgressData> processAction = null, CancellationTokenSource tokenSource = null)
         {
-            return DownloadDependenciesHandler.Builder()
-                .WithCategories(categories)
-                .Build();
+            var handler = Addressables.GetDownloadSizeAsync(categories);
+            AsyncOperationHandle downloadHandler = new();
+
+            return Task.Run(async () =>
+                {
+                    Debug.Log("Start Download Dependencies");
+
+                    while (!handler.IsDone)
+                        Thread.Yield();
+
+                    if (handler.Result <= 0)
+                        throw new Exception("No Dependence download");
+
+                    var totalSize = handler.Result.SizeSuffix();
+                    Debug.Log($"Dependence download start : {totalSize}");
+                    downloadHandler = Addressables.DownloadDependenciesAsync(
+                        categories, Addressables.MergeMode.None
+                    );
+
+                    if (processAction is not null && tokenSource is not null)
+                        await DownloadProgressHandler(downloadHandler, processAction, tokenSource.Token);
+
+                    while (!downloadHandler.IsDone)
+                        Thread.Yield();
+
+                    if (tokenSource is not null && tokenSource.IsCancellationRequested)
+                        throw new Exception("Dependencies download canceled");
+
+                    if (downloadHandler.Status is not AsyncOperationStatus.Succeeded)
+                        throw new Exception("Dependencies download failed");
+
+                    Debug.Log($"Dependence download completed");
+                },
+                TaskHandler.ApplicationAliveToken
+            ).Final(() =>
+                {
+                    Addressables.Release(handler);
+                    Addressables.Release(downloadHandler);
+                }
+            );
         }
 
-        public static LoadSceneHandler LoadScene(string assetKey, LoadSceneMode mode)
+        public static Promise<SceneInstance> LoadScene(string assetKey, LoadSceneMode mode, Action<ProgressData> processAction = null, CancellationTokenSource tokenSource = null)
         {
-            return LoadSceneHandler.Builder()
-                .WithAssetKey(assetKey)
-                .WithMode(mode)
-                .Build();
+            var handler = Addressables.LoadSceneAsync(assetKey, mode);
+            
+            return Task.Run(async () =>
+            {
+                if (processAction is not null && tokenSource is not null)
+                    await DownloadProgressHandler(handler, processAction, tokenSource.Token);
+                
+                while (!handler.IsDone)
+                    Thread.Yield();
+
+                if (handler.Status is not AsyncOperationStatus.Succeeded)
+                    throw new Exception($"Load Scene Fail: {assetKey} - {handler.Status}");
+
+                Debug.Log($"Load Scene Success : {assetKey}");
+                return handler.Result;
+            }).Final(() =>
+                Addressables.Release(handler)
+            );
         }
 
-        public static UnloadSceneHandler UnLoadScene(SceneInstance scene)
+        public static Promise UnLoadScene(SceneInstance scene)
         {
-            return UnloadSceneHandler.Builder()
-                .WithScene(scene)
-                .Build();
+            var handler = Addressables.UnloadSceneAsync(scene);
+            
+            return Task.Run(() =>
+            {
+                while (!handler.IsDone)
+                    Thread.Yield();
+                
+                if (handler.Status is not AsyncOperationStatus.Succeeded)
+                    throw new Exception($"Unload Scene Fail: {scene.Scene.name} - {handler.Status}");
+                
+                Debug.LogError($"Unload Scene Fail: {scene.Scene.name} - {handler.Status}");
+            }).Final(() =>
+                Addressables.Release(handler)
+            );
         }
 
-        public static LoadAssetHandler<T> LoadAsset<T>(AssetReference assetKey)
+        public static Promise<T> LoadAsset<T>(AssetReference assetKey)
         {
-            return LoadAssetHandler<T>.Builder()
-                .WithReference(assetKey)
-                .Build();
+            var handler = Addressables.LoadAssetAsync<T>(assetKey);
+            
+            return Task.Run(() =>
+            {
+                while (!handler.IsDone)
+                    Thread.Yield();
+
+                var asset = handler.Result;
+                if (asset is null)
+                    throw new Exception($"Asset Not Found : ({typeof(T).Name}) {assetKey}");
+
+                return asset;
+            }).Final(() =>
+                Addressables.Release(handler)
+            );
         }
 
-        public static InstantiateAssetHandler InstantiateGameObject(AssetReferenceGameObject reference, bool logging = false)
+        public static Promise<GameObject> InstantiateGameObject(AssetReferenceGameObject reference, bool logging = false)
         {
-            return InstantiateAssetHandler.Builder()
-                .WithReference(reference)
-                .WithLogging(logging)
-                .Build();
+            var handler = Addressables.InstantiateAsync(reference);
+            
+            return Task.Run(() =>
+            {
+                while (!handler.IsDone)
+                    Thread.Yield();
+                
+                var go = handler.Result;
+                if (go is null)
+                    throw new Exception($"Instantiate Asset Fail : {reference}");
+
+                return go;
+            }).Final(() =>
+                Addressables.Release(handler)
+            );
         }
 
         public static void ReleaseAsset<T>(T asset)
         {
             Addressables.Release(asset);
+        }
+        
+        private static Task DownloadProgressHandler(AsyncOperationHandle handle, Action<ProgressData> processAction, CancellationToken token)
+        {
+            while (handle.GetDownloadStatus().TotalBytes < 0)
+            {
+                if (token.IsCancellationRequested) return null;
+                Thread.Yield();
+            }
+
+            if (!handle.IsValid() || handle.IsDone) return null;
+            
+            var processData = new ProgressData
+            {
+                TotalValue = handle.GetDownloadStatus().TotalBytes
+            };
+
+            while (handle.Status is AsyncOperationStatus.None)
+            {
+                if (token.IsCancellationRequested) break;
+                
+                processData.CurrentValue = handle.GetDownloadStatus().DownloadedBytes;
+                processData.IsDone = handle.IsDone;
+                processAction.Invoke(processData);
+
+                if (handle.IsDone) break;
+                Thread.Yield();
+            }
+
+            return null;
         }
     }
 }
